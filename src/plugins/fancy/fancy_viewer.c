@@ -30,7 +30,6 @@
 #include <alertpanel.h>
 
 #include <printing.h>
-#include <webkit/webkithittestresult.h>
 
 static void
 load_start_cb (WebKitWebView *view, gint progress, FancyViewer *viewer);
@@ -266,11 +265,9 @@ static gboolean fancy_set_contents(FancyViewer *viewer, gboolean use_defaults)
 		}
 
 		contents = file_read_to_str_no_recode(viewer->filename);
-		webkit_web_view_load_string(viewer->view,
-					    contents,
-					    "text/html",
-					    charset,
-					    NULL);
+		webkit_web_view_load_html(viewer->view,
+					  contents,
+					  NULL);
 		g_free(contents);
 	}
 	viewer->loading = FALSE;
@@ -301,7 +298,7 @@ static void fancy_show_mimepart(MimeViewer *_viewer, const gchar *infile,
 	FancyViewer *viewer = (FancyViewer *) _viewer;
 	viewer->to_load = partinfo;
 	viewer->loading = TRUE;
-	g_timeout_add(5, (GtkFunction)fancy_show_mimepart_prepare, viewer);
+	g_timeout_add(5, (GSourceFunc)fancy_show_mimepart_prepare, viewer);
 }
 
 static void fancy_print(MimeViewer *_viewer)
@@ -393,43 +390,41 @@ static void fancy_destroy_viewer(MimeViewer *_viewer)
 
 static gboolean
 navigation_policy_cb (WebKitWebView             *web_view,
-		      WebKitWebFrame            *frame,
-		      WebKitNetworkRequest      *request,
-		      WebKitWebNavigationAction *navigation_action,
-		      WebKitWebPolicyDecision   *policy_decision,
+		      WebKitURIRequest   *request,
+		      WebKitNavigationAction *navigation_action,
+		      WebKitPolicyDecision   *policy_decision,
 		      FancyViewer		*viewer)
 {
-	const gchar *uri = webkit_network_request_get_uri(request);
+	const gchar *uri = webkit_uri_request_get_uri(request);
 
 	debug_print("navigation requested to %s\n", uri);
 
 	if (!strncmp(uri, "mailto:", 7)) {
 		debug_print("Opening message window\n");
 		compose_new(NULL, uri + 7, NULL);
-		webkit_web_policy_decision_ignore(policy_decision);
+		webkit_policy_decision_ignore(policy_decision);
 	} else if (!strncmp(uri, "file://", 7) || !strcmp(uri, "about:blank")) {
 		debug_print("local navigation request ACCEPTED\n");
-		webkit_web_policy_decision_use(policy_decision);
+		webkit_policy_decision_use(policy_decision);
 	} else if (viewer->override_prefs_remote_content) {
 		debug_print("remote navigation request ACCEPTED\n");
-		webkit_web_policy_decision_use(policy_decision);
+		webkit_policy_decision_use(policy_decision);
 	} else {
 		debug_print("remote navigation request IGNORED\n");
 		fancy_show_notice(viewer, _("Remote content loading is disabled."));
-		webkit_web_policy_decision_ignore(policy_decision);
+		webkit_policy_decision_ignore(policy_decision);
 	}
 
 	return true;
 }
 
 static void resource_request_starting_cb(WebKitWebView		*view,
-					 WebKitWebFrame		*frame,
 					 WebKitWebResource	*resource,
-					 WebKitNetworkRequest	*request,
-					 WebKitNetworkResponse	*response,
+					 WebKitURIRequest	*request,
+					 WebKitURIResponse	*response,
 					 FancyViewer		*viewer)
 {
-	const gchar *uri = webkit_network_request_get_uri(request);
+	const gchar *uri = webkit_uri_request_get_uri(request);
 	gchar *filename;
 	gchar *image;
 	gint err;
@@ -449,7 +444,7 @@ static void resource_request_starting_cb(WebKitWebView		*view,
 					alertpanel_error(_("Couldn't save the part of multipart message: %s"),
 										g_strerror(-err));
 				gchar *file_uri = g_filename_to_uri(filename, NULL, NULL);
-				webkit_network_request_set_uri(request, file_uri);
+				webkit_uri_request_set_uri(request, file_uri);
 				g_free(file_uri);
 				g_free(filename);
 				break;
@@ -457,13 +452,13 @@ static void resource_request_starting_cb(WebKitWebView		*view,
 		}
 		g_free(image);
 	}
-	
+
 	/* refresh URI that may have changed */
-	uri = webkit_network_request_get_uri(request);
+	uri = webkit_uri_request_get_uri(request);
 	if (!viewer->override_prefs_remote_content
 	    && strncmp(uri, "file://", 7) && strncmp(uri, "data:", 5)) {
 		debug_print("Preventing load of %s\n", uri);
-		webkit_network_request_set_uri(request, "about:blank");
+		webkit_uri_request_set_uri(request, "about:blank");
 	}
 	else
 		debug_print("Starting request of %zu %s\n", strlen(uri), uri);
@@ -607,15 +602,13 @@ static void load_progress_cb(WebKitWebView *view, GParamSpec* pspec,
 	g_free(label);
 
 	switch (status) {
-		case WEBKIT_LOAD_PROVISIONAL:
-		case WEBKIT_LOAD_COMMITTED:
-		case WEBKIT_LOAD_FIRST_VISUALLY_NON_EMPTY_LAYOUT:
-			break;
 		case WEBKIT_LOAD_FAILED:
 			debug_print("Load failed: %s\n", uri);
 			break;
 		case WEBKIT_LOAD_FINISHED:
 			debug_print("Load finished: %s\n", uri);
+			break;
+		default:
 			break;
 	}
 }
@@ -755,7 +748,7 @@ static void viewer_menu_handler(GtkWidget *menuitem, FancyViewer *viewer)
 				"Search the Web")) {
 			gtk_label_set_text(GTK_LABEL(menul), _("Search the Web"));
 			viewer->cur_link = NULL;
-			GtkImageMenuItem *m_search = GTK_IMAGE_MENU_ITEM(menuitem);
+			GtkWidget *m_search = gtk_menu_item_new();
 			g_signal_connect(G_OBJECT(m_search), "activate",
 					 G_CALLBACK(search_the_web_cb),
 					 (gpointer *) viewer);
@@ -769,7 +762,7 @@ static void viewer_menu_handler(GtkWidget *menuitem, FancyViewer *viewer)
 			else
 				gtk_label_set_text(GTK_LABEL(menul), _("Open in Viewer (enable remote content)"));
 
-			GtkImageMenuItem *m_new = GTK_IMAGE_MENU_ITEM(menuitem);
+			GtkWidget *m_new = gtk_menu_item_new();
 			gtk_widget_set_sensitive(GTK_WIDGET(m_new), viewer->override_prefs_remote_content);
 		}
 
@@ -778,7 +771,7 @@ static void viewer_menu_handler(GtkWidget *menuitem, FancyViewer *viewer)
 
 			gtk_label_set_text(GTK_LABEL(menul), _("Open in Browser"));
 
-			GtkImageMenuItem *m_new = GTK_IMAGE_MENU_ITEM(menuitem);
+			GtkWidget *m_new = gtk_menu_item_new();
 			g_signal_connect(G_OBJECT(m_new), "activate",
 					 G_CALLBACK(open_in_browser_cb),
 					 (gpointer *) viewer);
@@ -787,7 +780,7 @@ static void viewer_menu_handler(GtkWidget *menuitem, FancyViewer *viewer)
 		if (!g_ascii_strcasecmp(gtk_label_get_text(GTK_LABEL(menul)),
 					"Open Image in New Window" )) {
 			gtk_label_set_text(GTK_LABEL(menul), _("Open Image"));
-			GtkImageMenuItem *m_image = GTK_IMAGE_MENU_ITEM(menuitem);
+			GtkWidget *m_image = gtk_menu_item_new();
 			g_signal_connect(G_OBJECT(m_image), "activate",
 					 G_CALLBACK(open_image_cb),
 					 (gpointer *) viewer);
@@ -801,7 +794,7 @@ static void viewer_menu_handler(GtkWidget *menuitem, FancyViewer *viewer)
 				"Download Linked File" )) {
 			gtk_label_set_text(GTK_LABEL(menul), _("Download Link"));
 
-			GtkImageMenuItem *m_dlink = GTK_IMAGE_MENU_ITEM(menuitem);
+			GtkWidget *m_dlink = gtk_menu_item_new();
 			g_signal_connect(G_OBJECT(m_dlink), "activate",
 					 G_CALLBACK(download_file_cb),
 					 (gpointer *) viewer);
@@ -812,7 +805,7 @@ static void viewer_menu_handler(GtkWidget *menuitem, FancyViewer *viewer)
 
 			gtk_label_set_text(GTK_LABEL(menul), _("Save Image As"));
 
-			GtkImageMenuItem *m_simage = GTK_IMAGE_MENU_ITEM(menuitem);
+			GtkWidget *m_simage = gtk_menu_item_new();
 			g_signal_connect(G_OBJECT(m_simage), "activate",
 					 G_CALLBACK(save_image_cb),
 					 (gpointer *) viewer);
@@ -821,7 +814,7 @@ static void viewer_menu_handler(GtkWidget *menuitem, FancyViewer *viewer)
 		if (!g_ascii_strcasecmp(gtk_label_get_text(GTK_LABEL(menul)),
 					"Copy Image" )) {
 			gtk_label_set_text(GTK_LABEL(menul), _("Copy Image"));
-			GtkImageMenuItem *m_cimage = GTK_IMAGE_MENU_ITEM(menuitem);
+			GtkWidget *m_cimage = gtk_menu_item_new();
 			g_signal_connect(G_OBJECT(m_cimage), "activate",
 					 G_CALLBACK(copy_image_cb),
 					 (gpointer *) viewer);
@@ -838,9 +831,7 @@ static gboolean populate_popup_cb (WebKitWebView *view, GtkWidget *menu,
 			      (GtkCallback)viewer_menu_handler,
 			      viewer);
 	if (plugin) {
-		GtkWidget *rssyl = gtk_image_menu_item_new_with_label(_("Import feed"));
-		GtkWidget *img = gtk_image_new_from_stock(GTK_STOCK_ADD, GTK_ICON_SIZE_MENU);
-		gtk_image_menu_item_set_image(GTK_IMAGE_MENU_ITEM(rssyl), img);
+		GtkWidget *rssyl = gtk_menu_item_new_with_label(_("Import feed"));
 		gtk_widget_show(GTK_WIDGET(rssyl));
 		gtk_menu_shell_append(GTK_MENU_SHELL(menu), rssyl);
 		g_signal_connect(G_OBJECT(rssyl), "activate",
@@ -855,13 +846,13 @@ static gint keypress_events_cb (GtkWidget *widget, GdkEventKey *event,
 {
 	if (event->state == CTRL_KEY) {
 		switch (event->keyval) {
-		case GDK_plus:
+		case GDK_KEY_plus:
 			zoom_in_cb(viewer->ev_zoom_in, NULL, viewer);
 			break;
-		case GDK_period:
+		case GDK_KEY_period:
 			zoom_100_cb(viewer->ev_zoom_100, NULL, viewer);
 			break;
-		case GDK_minus:
+		case GDK_KEY_minus:
 			zoom_out_cb(viewer->ev_zoom_out, NULL, viewer);
 			break;
 		}
@@ -930,18 +921,21 @@ static void zoom_100_cb(GtkWidget *widget, GdkEvent *ev, FancyViewer *viewer)
 
 static void zoom_in_cb(GtkWidget *widget, GdkEvent *ev, FancyViewer *viewer)
 {
+	gdouble zoom_level;
 	gtk_widget_grab_focus(widget);
-	webkit_web_view_zoom_in(viewer->view);
+	zoom_level = webkit_web_view_get_zoom_level(viewer->view) + 0.1;
+	webkit_web_view_set_zoom_level(viewer->view, zoom_level);
 }
 static void zoom_out_cb(GtkWidget *widget, GdkEvent *ev, FancyViewer *viewer)
 {
+	gdouble zoom_level;
 	gtk_widget_grab_focus(widget);
-	webkit_web_view_zoom_out(viewer->view);
+	zoom_level = webkit_web_view_get_zoom_level(viewer->view) - 0.1;
+	webkit_web_view_set_zoom_level(viewer->view, zoom_level);
 }
 
 #if WEBKIT_CHECK_VERSION (1,7,5)
 static void resource_load_failed_cb(WebKitWebView     *web_view,
-				    WebKitWebFrame    *web_frame,
 				    WebKitWebResource *web_resource,
 				    GError            *error,
 				    FancyViewer	      *viewer)
@@ -984,7 +978,7 @@ static MimeViewer *fancy_viewer_create(void)
 		g_object_set(session, "proxy-uri", pURI, NULL);
 	}
 
-	viewer->settings = webkit_web_settings_new();
+	viewer->settings = webkit_settings_new();
 	g_object_set(viewer->settings, "user-agent", "Fancy Viewer", NULL);
 	viewer->scrollwin = gtk_scrolled_window_new(NULL, NULL);
 	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(viewer->scrollwin),
@@ -998,10 +992,10 @@ static MimeViewer *fancy_viewer_create(void)
 	hbox = gtk_hbox_new(FALSE, 0);
 	viewer->progress = gtk_progress_bar_new();
 	/* Zoom Widgets */
-	viewer->zoom_100 = gtk_image_new_from_stock(GTK_STOCK_ZOOM_100, GTK_ICON_SIZE_MENU);
-	viewer->zoom_in = gtk_image_new_from_stock(GTK_STOCK_ZOOM_IN, GTK_ICON_SIZE_MENU);
-	viewer->zoom_out = gtk_image_new_from_stock(GTK_STOCK_ZOOM_OUT, GTK_ICON_SIZE_MENU);
-	viewer->stop_loading = gtk_image_new_from_stock(GTK_STOCK_CANCEL, GTK_ICON_SIZE_MENU);
+	viewer->zoom_100 = gtk_image_new_from_icon_name("zoom-original", GTK_ICON_SIZE_MENU);
+	viewer->zoom_in = gtk_image_new_from_icon_name("zoom-in", GTK_ICON_SIZE_MENU);
+	viewer->zoom_out = gtk_image_new_from_icon_name("zoom-out", GTK_ICON_SIZE_MENU);
+	viewer->stop_loading = gtk_image_new_from_icon_name(GTK_STOCK_CANCEL, GTK_ICON_SIZE_MENU);
 	/* Event Widgets for the Zoom Widgets  */
 	viewer->ev_zoom_100 = gtk_event_box_new();
 	viewer->ev_zoom_in = gtk_event_box_new();
@@ -1012,7 +1006,7 @@ static MimeViewer *fancy_viewer_create(void)
 	viewer->l_link = gtk_label_new("");
 
 	/* Preferences Widgets to override preferences on the fly  */
-	viewer->fancy_prefs = gtk_image_new_from_stock(GTK_STOCK_PREFERENCES, GTK_ICON_SIZE_MENU);
+	viewer->fancy_prefs = gtk_image_new_from_icon_name("preferences-system", GTK_ICON_SIZE_MENU);
 	viewer->ev_fancy_prefs = gtk_event_box_new();
 
 	/* Popup Menu for preferences  */
@@ -1077,7 +1071,7 @@ static MimeViewer *fancy_viewer_create(void)
 
 	g_signal_connect(G_OBJECT(viewer->view), "resource-request-starting",
 			G_CALLBACK(resource_request_starting_cb), viewer);
-	g_signal_connect(G_OBJECT(viewer->view), "populate-popup",
+	g_signal_connect(G_OBJECT(viewer->view), "context-menu",
 			 G_CALLBACK(populate_popup_cb), viewer);
 	g_signal_connect(G_OBJECT(viewer->view), "button-press-event",
 			 G_CALLBACK(press_button_cb), viewer);

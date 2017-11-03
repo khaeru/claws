@@ -240,13 +240,15 @@ gboolean auto_configure_service_sync(const gchar *service, const gchar *domain, 
 
 
 #if GTK_CHECK_VERSION (3, 2, 0)
+#if !GTK_CHECK_VERSION(3,22,25)
 #define GTK_TYPE_VBOX GTK_TYPE_BOX
+#define GTK_TYPE_HBOX GTK_TYPE_BOX
+#endif
 #define GtkVBox GtkBox
 #define GtkVBoxClass GtkBoxClass
 #define gtk_vbox_new(hmg,spc) g_object_new (GTK_TYPE_BOX, \
     "homogeneous", hmg, "spacing", spc, \
     "orientation", GTK_ORIENTATION_VERTICAL, NULL)
-#define GTK_TYPE_HBOX GTK_TYPE_BOX
 #define GtkHBox GtkBox
 #define GtkHBoxClass GtkBoxClass
 #define gtk_hbox_new(hmg,spc) g_object_new (GTK_TYPE_BOX, \
